@@ -74,3 +74,6 @@ split-debuginfo = "packed"
 strip = "symbols"
 # No one needs an undebuggable release binary
 debug = "full"
+
+[patch.crates-io]
+rustix = { git = "https://github.com/jackpot51/rustix.git" }
