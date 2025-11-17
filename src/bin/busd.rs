@@ -6,7 +6,7 @@ use busd::{bus, config::Config};
 
 use anyhow::Result;
 use clap::Parser;
-use tokio::{select, signal::unix::SignalKind};
+use tokio::{process, select, signal::unix::SignalKind};
 use tracing::{error, info, warn};
 
 /// A simple D-Bus broker.
@@ -17,6 +17,9 @@ struct Args {
     /// Takes precedence over any `<listen>` element in the configuration file.
     #[clap(short = 'a', long, value_parser)]
     address: Option<String>,
+
+    #[clap(short = 'c', long, value_parser)]
+    command: Option<String>,
 
     /// Use the given configuration file.
     #[clap(long)]
@@ -45,6 +48,26 @@ struct Args {
     /// Equivalent to `--config /usr/share/dbus-1/system.conf`.
     #[clap(long)]
     system: bool,
+}
+
+async fn run_command(command_opt: Option<String>, bus_address: String) -> Result<()> {
+    let Some(command) = command_opt else {
+        // Simulate never ending command
+        std::future::pending().await
+    };
+    //TODO: use shlex instead of sh -c?
+    let mut child = process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .env("DBUS_SESSION_BUS_ADDRESS", bus_address)
+        .spawn()?;
+    let status = child.wait().await?;
+    //TODO: use exit_status_error when stable
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("exit status {}", status))
+    }
 }
 
 #[tokio::main]
@@ -82,15 +105,21 @@ async fn main() -> Result<()> {
         println!("{}", bus.address());
     }
 
+    let command_future = run_command(args.command, bus.address().to_string());
+
     let mut sig_int = tokio::signal::unix::signal(SignalKind::interrupt())?;
 
     select! {
         _ = sig_int.recv() => {
             info!("Received SIGINT, shutting down..");
-        }
+        },
         res = bus.run() => match res {
             Ok(()) => warn!("Bus stopped, shutting down.."),
             Err(e) => error!("Bus stopped with an error: {}", e),
+        },
+        res = command_future => match res {
+            Ok(()) => info!("Command exited, shutting down.."),
+            Err(err) => error!("Command exited with an error: {}", err),
         }
     }
 
